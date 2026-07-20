@@ -107,8 +107,13 @@ The example demonstrates the structure of the telemetry data transmitted to Azur
 ├── README.md
 ├── src
 │   ├── device-simulator
-│   ├── process-device-telemetry
-│   └── get-device-status
+│   │   └── iot-device-simulator.py
+│   ├── get-device-status
+│   │   ├── __init__.py
+│   │   └── function.json
+│   └── process-device-telemetry
+│       ├── __init__.py
+│       └── function.json
 ├── examples
 │   └── telemetry-message.json
 └── images
