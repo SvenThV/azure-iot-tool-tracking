@@ -1,0 +1,26 @@
+{
+  "deviceId": "Tool_1",
+  "productNumber": 1000000001,
+  "motorRuntime": 3850,
+  "createdAt": "2025-04-12T17:36:43Z",
+  "toolEvents": [
+    3
+  ],
+  "location": {
+    "coordinates": [
+      49.123456,
+      9.123456
+    ],
+    "updatedAt": "2025-04-12T17:36:43Z"
+  },
+  "BatteryMeasurement": {
+    "batteryProductNumber": 2000000001,
+    "chargingStatus": false,
+    "stateOfCharge": 87,
+    "temperature": 42,
+    "voltage": 19.8,
+    "current": 25.3,
+    "timeToCharge": 0,
+    "createdAt": "2025-04-12T17:36:43Z"
+  }
+}
