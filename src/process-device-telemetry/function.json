@@ -1,0 +1,16 @@
+{
+  "scriptFile": "__init__.py",
+  "bindings": [
+    {
+      "name": "documents",
+      "type": "cosmosDBTrigger",
+      "direction": "in",
+      "connection": "COSMOS_DB_CONNECTION_STRING",
+      "databaseName": "IoTDeviceData",
+      "containerName": "DeviceStatus",
+      "leaseContainerName": "leases",
+      "createLeaseContainerIfNotExists": true,
+      "startFromBeginning": true
+    }
+  ]
+}
