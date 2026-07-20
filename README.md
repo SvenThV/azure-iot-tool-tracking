@@ -65,20 +65,19 @@ Supported interactions include:
 - Remote device control
 - Device status queries
 - Device location queries
+- Automatic maintenance recommendations
 
 ---
 
 # Azure Services
 
-The following Azure services are used within this project:
+The following Microsoft Azure services are used within this project:
 
 | Service | Purpose |
 |----------|---------|
-| Azure IoT Hub | Secure communication with IoT devices |
+| Azure IoT Hub | Secure communication with simulated IoT devices |
 | Azure Cosmos DB | Storage of telemetry data |
-| Azure Functions | Event-driven processing and business logic |
-| Azure Storage Account | Function App storage |
-| Managed Identity | Secure authentication between Azure services |
+| Azure Functions | Serverless processing of telemetry and business logic |
 
 ---
 
@@ -121,12 +120,11 @@ The example demonstrates the structure of the telemetry data transmitted to Azur
 
 # Technologies
 
+- Python
 - Microsoft Azure
 - Azure IoT Hub
 - Azure Functions
 - Azure Cosmos DB
-- Azure Storage Account
-- Python
 - WhatsApp Cloud API
 - JSON
 
@@ -137,8 +135,8 @@ The example demonstrates the structure of the telemetry data transmitted to Azur
 During the implementation of this project, the following concepts and technologies were explored:
 
 - Designing event-driven cloud architectures
-- Processing IoT telemetry with Azure Functions
-- Integrating Azure IoT Hub with Cosmos DB
+- Processing IoT telemetry using Azure Functions
+- Integrating Azure IoT Hub with Azure Cosmos DB
 - Implementing Cloud-to-Device communication
 - Developing serverless applications on Microsoft Azure
 - Integrating external REST APIs
@@ -151,6 +149,6 @@ During the implementation of this project, the following concepts and technologi
 
 This repository contains a simplified version of the solution developed as part of my Bachelor's thesis.
 
-Sensitive information such as connection strings, API keys, resource identifiers, and secrets has been removed or anonymized.
+Sensitive information such as connection strings, API keys, resource identifiers, and secrets have been removed or anonymized.
 
 Telemetry data, device identifiers, and sample messages are provided for demonstration purposes only.
