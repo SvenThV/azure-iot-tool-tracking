@@ -1,34 +1,34 @@
-import logging
+import logging   
 import json
 import os
 import base64
-import requests
+from datetime import datetime
 import azure.functions as func
-from azure.cosmos import CosmosClient
 from azure.iot.hub import IoTHubRegistryManager
 from azure.iot.hub.models import CloudToDeviceMethod
+import requests
+from azure.cosmos import CosmosClient
 
 # Umgebungsvariablen
+IOT_HUB_CONNECTION_STRING = os.getenv("IOT_HUB_CONNECTION_STRING")
 COSMOS_DB_URL = os.getenv("COSMOS_DB_URL")
 COSMOS_DB_KEY = os.getenv("COSMOS_DB_KEY")
-IOT_HUB_CONNECTION_STRING = os.getenv("IOT_HUB_CONNECTION_STRING")
+DATABASE_NAME = "IoTDeviceData"
 WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL")
 WHATSAPP_API_KEY = os.getenv("WHATSAPP_API_KEY")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-DATABASE_NAME = "IoTDeviceData"
-STATUS_CONTAINER = "DeviceStatus"
+WHATSAPP_TEST_NUMBER = os.getenv("WHATSAPP_TEST_NUMBER")
 
 # Tool-Fehlercodes
 CRITICAL_ERRORS = {
-    4: "🛑 Motorausfall",
-    5: "🛑 Akku nicht erkannt",
-    6: "🛑 Softwarefehler"
+    4: "🛑 Motorausfall erkannt – Gerät wird abgeschaltet.",
+    5: "🛑 Akku nicht erkannt – Gerät wird abgeschaltet.",
+    6: "🛑 Softwarefehler erkannt – Gerät wird abgeschaltet."
 }
 
 NON_CRITICAL_ERRORS = {
-    1: "⚠️ Geringfügiger Sensorfehler",
-    2: "⚠️ Geringe Motoreffizienz",
-    3: "⚠️ Kurzzeitiges Kommunikationsproblem"
+    1: "⚠️ Geringfügiger Sensorfehler erkannt.",
+    2: "⚠️ Geringe Motoreffizienz erkannt.",
+    3: "⚠️ Kurzzeitiges Kommunikationsproblem erkannt."
 }
 
 # Gerätebezeichnungen
@@ -41,161 +41,125 @@ DEVICE_LABELS = {
 }
 
 # WhatsApp Nachricht senden
-def send_whatsapp_message(phone_number, message):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone_number,
-        "type": "text",
-        "text": { "body": message }
-    }
+def send_whatsapp_message(to_number: str, message: str):
     headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {WHATSAPP_API_KEY}"
+        "Authorization": f"Bearer {WHATSAPP_API_KEY}",
+        "Content-Type": "application/json"
     }
-    response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
-    logging.info(f"Sent message to {phone_number}: {response.status_code} - {response.text}")
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {
+            "body": message
+        }
+    }
+    try:
+        response = requests.post(WHATSAPP_API_URL, headers=headers, json=data)
+        logging.info(f"WhatsApp sent ({response.status_code}): {response.text}")
+    except Exception as e:
+        logging.error(f"WhatsApp API error: {e}")
 
 # Einstiegspunkt der Azure Function
-def main(req: func.HttpRequest) -> func.HttpResponse:
+def main(documents: func.DocumentList) -> None:
+    logging.info("Cosmos DB Trigger function started")
+
+    if not documents:
+        logging.info("ℹNo documents received — exiting function.")
+        return
+
+    logging.info(f"Received {len(documents)} documents")
+
+    cosmos_client = CosmosClient(COSMOS_DB_URL, COSMOS_DB_KEY)
+    database = cosmos_client.get_database_client(DATABASE_NAME)
+
     try:
-        if req.method == "GET":
-            # Verifizierung des Meta-Webhooks
-            mode = req.params.get("hub.mode")
-            token = req.params.get("hub.verify_token")
-            challenge = req.params.get("hub.challenge")
+        registry_manager = IoTHubRegistryManager(IOT_HUB_CONNECTION_STRING)
 
-            if mode == "subscribe" and token == VERIFY_TOKEN:
-                logging.info("Webhook verification successful")
-                return func.HttpResponse(challenge, status_code=200)
-            else:
-                logging.warning("Invalid verification token")
-                return func.HttpResponse("Unauthorized", status_code=403)
+        for document in documents:
+            try:
+                raw_body = document.get("Body")
+                if raw_body:
+                    decoded = json.loads(base64.b64decode(raw_body).decode("utf-8"))
+                    event_data = decoded
+                    logging.info(f"Decoded telemetry body for device: {event_data}")
+                else:
+                    event_data = document
+                    logging.warning("No 'Body' field found - using raw document.")
+            except Exception as e:
+                logging.error(f"Error decoding telemetry body: {e}")
+                event_data = {}
 
-        elif req.method == "POST":
-            # Verarbeitung eingehender WhatsApp-Nachricht
-            data = req.get_json()
-            logging.info(f"Incoming WhatsApp webhook: {json.dumps(data)}")
+            device_id = event_data.get("deviceId")
+            device_label = DEVICE_LABELS.get(device_id, device_id)
+            tool_events = event_data.get("toolEvents")
+            created_at = event_data.get("createdAt")
 
-            if "messages" not in data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}):
-                return func.HttpResponse("No message found", status_code=200)
+            battery = event_data.get("BatteryMeasurement")
+            temperature = battery.get("temperature")
+            state_of_charge = battery.get("stateOfCharge")
+            voltage = battery.get("voltage")
+            current = battery.get("current")
+            charging = battery.get("chargingStatus")
+            motor_runtime = event_data.get("motorRuntime")
 
-            message = data["entry"][0]["changes"][0]["value"]["messages"][0]
-            user_message = message["text"]["body"].lower()
-            sender_phone = message["from"]
+            log_msg = (
+                f"Extracted from {device_id} | "
+                f"SOC: {state_of_charge}%, Temp: {temperature}°C, "
+                f"Voltage: {voltage}V, Current: {current}A, ToolEvent: {tool_events}"
+            )
+            logging.info(log_msg)
 
-            # Suche nach Gerätename im Nachrichtentext
-            found_device = None
-            for label in DEVICE_LABELS.values():
-                if label.lower() in user_message:
-                    found_device = label
-                    break
+            # Prüfung auf kritische und nicht-kritische Bedingungen
+            warning_alerts = []
+            shutdown_alerts = []
 
-            if not found_device:
-                send_whatsapp_message(sender_phone, "⚠️ Bitte gib ein Gerät an, z. B. 'Status Bohrmaschine'")
-                return func.HttpResponse("OK", status_code=200)
+            # Temperatur
+            if temperature > 60:
+                shutdown_alerts.append("🛑 Überhitzung! Temperatur über 60 °C – Gerät wird abgeschaltet.")
 
-            # Device-ID aus Label ableiten
-            device_id = [key for key, val in DEVICE_LABELS.items() if val == found_device][0]
-            device_label = found_device
+            # Spannung
+            if voltage < 15.0:
+                shutdown_alerts.append("🛑 Kritisch niedrige Spannung (<16.0 V) – Gerät wird abgeschaltet.")
 
-            # Verbindung zu Cosmos DB herstellen
-            client = CosmosClient(COSMOS_DB_URL, COSMOS_DB_KEY)
-            database = client.get_database_client(DATABASE_NAME)
-            status_container = database.get_container_client(STATUS_CONTAINER)
+            # Strom
+            if current > 50:
+                shutdown_alerts.append("🛑 Auffällige Stromaufnahme (>50 A) – Gerät wird abgeschaltet.")
 
-            # Abfrage des letzten Telemetrie-Datensatzes
-            telemetry_query = f"""
-            SELECT TOP 1 * FROM c 
-            WHERE c.SystemProperties["iothub-connection-device-id"] = '{device_id}' 
-            ORDER BY c._ts DESC
-            """
-            telemetry_items = list(status_container.query_items(query=telemetry_query, enable_cross_partition_query=True))
+            # ToolEvents
+            event_code = tool_events[0]
+            if event_code in CRITICAL_ERRORS:
+                shutdown_alerts.append(CRITICAL_ERRORS[event_code])
+            elif event_code in NON_CRITICAL_ERRORS:
+                warning_alerts.append(NON_CRITICAL_ERRORS[event_code])
 
-            telemetry_data = None
-            latitude = None
-            longitude = None
+            # Wartungshinweis bei langer Laufzeit
+            if motor_runtime > 7100: # 2 Stunden 
+                warning_alerts.append("🔁 Hohe Laufzeit – Wartung empfohlen.")
 
-            if telemetry_items and "Body" in telemetry_items[0]:
+            # Hinweis bei vollem Akku
+            if state_of_charge == 100 and not charging:
+                warning_alerts.append("✅ Akku vollständig geladen – bereit für den Einsatz.")
+
+            # WhatsApp Nachrichten senden
+            for msg in shutdown_alerts + warning_alerts:
+                send_whatsapp_message(WHATSAPP_TEST_NUMBER, f"{device_label} {msg}")
+
+            # Shutdown an Gerät senden
+            if shutdown_alerts:
                 try:
-                    body = telemetry_items[0]["Body"]
-                    decoded = base64.b64decode(body).decode("utf-8")
-                    telemetry_data = json.loads(decoded)
-                    coordinates = telemetry_data.get("location", {}).get("coordinates", [])
-                    if len(coordinates) >= 2:
-                        latitude, longitude = coordinates[0], coordinates[1]
-                except Exception as e:
-                    logging.warning(f"Failed to decode telemetry: {e}")
-
-            # Steuerbefehle verarbeiten
-            if "reset" in user_message:
-                try:
-                    registry = IoTHubRegistryManager(IOT_HUB_CONNECTION_STRING)
+                    payload = {
+                        "message": f"Device shutting down due to: {', '.join(shutdown_alerts)}"
+                    }
                     method = CloudToDeviceMethod(
-                        method_name="reset",
-                        payload={"message": "Reset command triggered via WhatsApp"},
+                        method_name="shutdown",
+                        payload=payload,
                         response_timeout_in_seconds=30
                     )
-                    response = registry.invoke_device_method(device_id, method)
-                    logging.info(f"Reset command sent to {device_id}: {response}")
-                    send_whatsapp_message(sender_phone, f"Reset command sent to {device_label}.")
+                    response = registry_manager.invoke_device_method(device_id, method)
+                    logging.info(f"Shutdown command sent to {device_id}: {response}")
                 except Exception as e:
-                    logging.error(f"Failed to send reset command to {device_id}: {e}")
-                    send_whatsapp_message(sender_phone, f"Failed to send reset command to {device_label}.")
-
-            elif "position" in user_message:
-                if latitude and longitude:
-                    send_whatsapp_message(sender_phone, f"📍 Position von {device_label}:\nhttps://www.google.com/maps?q={latitude},{longitude}")
-                else:
-                    send_whatsapp_message(sender_phone, f"⚠️ Keine Positionsdaten für {device_label} gefunden.")
-
-            elif "status" in user_message:
-                if telemetry_data:
-                    created_at = telemetry_data.get("createdAt", "")[:19].replace("T", " ")
-                    motor_runtime = telemetry_data.get("motorRuntime", 0)
-
-                    # Umrechnung der Laufzeit in Stunden und Minuten
-                    hours = motor_runtime // 3600
-                    minutes = (motor_runtime % 3600) // 60
-
-                    battery = telemetry_data.get("BatteryMeasurement", {})
-                    tool_event_code = telemetry_data.get("toolEvents", [0])[0]
-
-                    status_text = "Kein Fehler"
-                    if tool_event_code in CRITICAL_ERRORS:
-                        status_text = CRITICAL_ERRORS[tool_event_code]
-                    elif tool_event_code in NON_CRITICAL_ERRORS:
-                        status_text = NON_CRITICAL_ERRORS[tool_event_code]
-
-                    charging = "Ja" if battery.get("chargingStatus") else "Nein"
-                    soc = battery.get("stateOfCharge", "–")
-                    temp = battery.get("temperature", "–")
-                    voltage = battery.get("voltage", "–")
-                    current = battery.get("current", "–")
-                    ttc = battery.get("timeToCharge", "–")
-
-                    message_text = (
-                        f"📊 *Status von {device_label}*\n\n"
-                        f"🟦 *Allgemein*\n"
-                        f"🕒 Letztes Update: {created_at}\n"
-                        f"⏱ Gesamtlaufzeit: {hours} Std. {minutes} Min.\n"
-                        f"💡 Systemmeldung: {status_text}\n\n"
-                        f"🟩 *Batterie*\n"
-                        f"🔌 Lädt: {charging}\n"
-                        f"🪫 Ladestand: {soc} %\n"
-                        f"🌡 Temperatur: {temp} °C\n"
-                        f"⚡ Spannung: {voltage} V\n"
-                        f"🔋 Strom: {current} A\n"
-                        f"⌛ Zeit bis voll: {ttc} Sek."
-                    )
-                    send_whatsapp_message(sender_phone, message_text)
-                else:
-                    send_whatsapp_message(sender_phone, f"⚠️ Keine Telemetriedaten für {device_label} gefunden.")
-
-            return func.HttpResponse("OK", status_code=200)
-
-        else:
-            return func.HttpResponse("Method Not Allowed", status_code=405)
+                    logging.error(f"Failed to send shutdown command to {device_id}: {e}")
 
     except Exception as e:
-        logging.error(f"Error in WhatsApp Webhook: {e}")
-        return func.HttpResponse("Fehler beim Verarbeiten", status_code=500)
+        logging.error(f"Error in main alert handler: {e}")
